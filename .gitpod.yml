@@ -1,37 +1,86 @@
-FROM gitpod/workspace-full-vnc:2023-06-16-09-50-58
-SHELL ["/bin/bash", "-c"]
-ENV ANDROID_HOME=$HOME/androidsdk \
-    FLUTTER_VERSION=3.0.2-stable \
-    QTWEBENGINE_DISABLE_SANDBOX=1
-ENV PATH="$HOME/flutter/bin:$ANDROID_HOME/emulator:$ANDROID_HOME/tools:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+image:
+  file: .gitpod.Dockerfile
+tasks:
+  - name: Android Appetize info
+    # Gitpod is not able to run emulators within a worspace at this stage as
+    # Google Kubernetes Engine does not support Nested Virtualization.
+    #
+    # If running Gitpod on your own infrastructure or via the Dockerfile locally
+    # on infrastructure that exposes vmx or svm then this command will launch
+    # the emulator.
+    #
+    # $ emulator -avd avd28 -no-audio -no-window
+    #
+    # Until this restriction is mitigated you can run native mobile apps in your
+    # browser via https://appetize.io/
+    command: |
+      printf "\033[3J\033c\033[3J"
+      printf 'info[gitpod]: %s\n' \
+        "If you want to build apk/appbundle for Android then you might consider doing the below" \
+        "Appetize can will help you debug your app inside the browser"
+      if test -z "$APPETIZE_API_TOKEN"; then
+          printf '%s\n\n' \
+            "Appetize API token not set. Run:" \
+            "    gp env APPETIZE_API_TOKEN=your_token" \
+            "and create a new workspace in order to get an app preview." \
+            "Request your token here: https://appetize.io/docs#request-api-token if you want to test android builds"
+      else
+          curl -sS --http1.1 "https://$APPETIZE_API_TOKEN@api.appetize.io/v1/apps/$APPETIZE_PUBLICKEY" \
+              -F "file=@/workspace/template-flutter/build/app/outputs/flutter-apk/app.apk" \
+              -F platform=android \
+              -F "buttonText=Start App" \
+              -F "postSessionButtonText=Start App" \
+              > .appetize.json
 
-# Install Open JDK for android and other dependencies
-USER root
-RUN install-packages openjdk-8-jdk -y \
-        libgtk-3-dev \
-        libnss3-dev \
-        fonts-noto \
-        fonts-noto-cjk \
-    && update-java-alternatives --set java-1.8.0-openjdk-amd64
+          APPETIZE_PUBLICKEY=$(jq -r .publicKey .appetize.json)
+          gp env "APPETIZE_PUBLICKEY=$APPETIZE_PUBLICKEY"
+          export APPETIZE_PUBLICKEY
+          gp preview "https://appetize.io/embed/$APPETIZE_PUBLICKEY?device=pixel4&autoplay=true"
+      fi
+  - name: Build for different targets
+    init: |
+      if test ! -e "pubspec.yaml"; then {
+        rm -f /workspace/.template_init
+        flutter create --project-name gitpod_flutter_quickstart .
+      } fi
+      flutter build -v linux
+      flutter build -v web
 
-# Make some changes for our vnc client and flutter chrome
-# RUN sed -i 's|resize=scale|resize=remote|g' /opt/novnc/index.html \
-#     && _gc_path="$(command -v google-chrome)" \
-#     && rm "$_gc_path" && printf '%s\n' '#!/usr/bin/env bash' \
-#                                         'chromium --start-fullscreen "$@"' > "$_gc_path" \
-#     && chmod +x "$_gc_path" 
+      ### If you want to build for android, consider uncommenting the below lines
+      # flutter build -v bundle
+      # flutter build -v appbundle
+      # flutter build -v apk
 
-# Insall flutter and dependencies
-USER gitpod
-RUN wget -q "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}.tar.xz" -O - \
-    | tar xpJ -C "$HOME" \
-    && _file_name="commandlinetools-linux-8092744_latest.zip" && wget "https://dl.google.com/android/repository/$_file_name" \
-    && unzip "$_file_name" -d $ANDROID_HOME \
-    && rm -f "$_file_name" \
-    && mkdir -p $ANDROID_HOME/cmdline-tools/latest \
-    && mv $ANDROID_HOME/cmdline-tools/{bin,lib} $ANDROID_HOME/cmdline-tools/latest \
-    && yes | sdkmanager "platform-tools" "build-tools;31.0.0" "platforms;android-31" \
-    && flutter precache && for _plat in web linux-desktop; do flutter config --enable-${_plat}; done \
-    && flutter config --android-sdk $ANDROID_HOME \
-    && yes | flutter doctor --android-licenses \
-    && flutter doctor
+      ### This line is necessary for the below `- name: Run project` to await before proceeding to `flutter run` when prebuilds are not effective
+      # We could use `gp sync-[done|await] <id>` but that won't work between `init` and `command`
+      touch /workspace/.template_init
+
+  - name: Run project
+    command: |
+      printf "\033[3J\033c\033[3J" && if test ! -e /workspace/.template_init; then {
+        printf 'info[gitpod]: %s\n' "Waiting for the flutter build process to complete ..."
+        until test -e /workspace/.template_init; do
+          sleep 0.5
+        done
+      } fi
+      flutter run
+
+ports:
+  - port: 5900
+    onOpen: ignore
+    # vnc
+  - port: 6080
+    onOpen: open-preview
+    # flutter
+  - port: 8080
+    onOpen: ignore
+  - port: 5037
+    onOpen: ignore
+  - port: 9100-9101
+    onOpen: ignore
+  - port: 40000-50000
+    onOpen: ignore
+
+vscode:
+  extensions:
+    - dart-code.flutter
