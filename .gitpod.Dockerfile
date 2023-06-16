@@ -11,3 +11,12 @@ RUN apt-get update && \
     apt-get install -y dart
 
 ENV PATH="/usr/lib/dart/bin:${PATH}"
+
+USER gitpod
+
+# Install Flutter SDK
+RUN git clone https://github.com/flutter/flutter.git -b stable --depth 1 && \
+    export PATH="$PATH:/workspace/flutter/bin" && \
+    flutter config --enable-web
+
+ENV PATH="/workspace/flutter/bin:${PATH}"
